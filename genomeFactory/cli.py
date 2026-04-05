@@ -15,6 +15,8 @@ from .command import (
     run_sae_train,
     run_sae_regression,
     run_protein,
+    run_collect,
+    run_train_joint,
 )
 
 
@@ -22,8 +24,12 @@ def main():
     parser = argparse.ArgumentParser(
         description="GenomeFactory Command Line Interface"
     )
-    parser.add_argument("command", choices=["train", "inference", "webui", "download","process","sae_train","sae_regression","protein"],
-                        help="train or inference or webui or download or process or sae_train or sae_regression")
+    parser.add_argument("command", choices=[
+                            "train", "inference", "webui", "download", "process",
+                            "sae_train", "sae_regression", "protein",
+                            "collect", "train_joint",
+                        ],
+                        help="Command to run")
     parser.add_argument("config_path", type=str, nargs="?",
                         help="Path to the YAML config file (not required for webui or download)")
     args = parser.parse_args()
@@ -44,8 +50,20 @@ def main():
     with open(args.config_path, "r", encoding="utf-8") as f:
         config = yaml.safe_load(f)
 
+    if args.command == "collect":
+        run_collect(args.config_path)
+        return
+    elif args.command == "train_joint":
+        run_train_joint(config)
+        return
+
     if args.command == "train":
-        run_train(config)
+        # Check if this is a multi-task learning config
+        if config.get("mtl"):
+            from .command import run_train_mtl
+            run_train_mtl(config, args.config_path)
+        else:
+            run_train(config)
     elif args.command == "inference":
         output = run_inference(config)
         print("Inference output:\n", output)

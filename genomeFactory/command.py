@@ -3,6 +3,114 @@ import yaml
 import os
 import subprocess
 import sys
+import tempfile
+import json
+
+
+# ======================================================================
+# Feature 1: Multi-stage bioinformatics pipeline ("collect" command)
+# ======================================================================
+
+def run_collect(config_path: str):
+    """
+    Run a multi-stage bioinformatics pipeline.
+
+    The YAML at *config_path* defines a ``pipeline`` section with a list
+    of stages.  Each stage has a ``type`` (e.g. HostFilter, QualityTrim,
+    TaxonExtract, SequenceExtract, CustomCommand) and a ``config`` dict.
+    """
+    pipeline_script = os.path.join(
+        os.path.dirname(__file__), "Data/Pipeline/run_pipeline.py"
+    )
+    cmd = ["python", pipeline_script, "--pipeline_config", config_path]
+    print("[genomefactory-cli] Running collect pipeline:", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+
+# ======================================================================
+# Feature 2: Joint optimization of preprocessing + model training
+# ======================================================================
+
+def run_train_joint(config: dict):
+    """
+    Train with joint optimisation: learnable NormalizationLayer +
+    composite loss (task + batch-MMD + bio-preservation).
+    """
+    joint_script = os.path.join(
+        os.path.dirname(__file__), "Train/train_scripts/joint/train_joint.py"
+    )
+
+    model_name = config.get("model", {}).get("model_name_or_path", "zhihan1996/DNABERT-2-117M")
+    joint_cfg = config.get("joint", {})
+    train_cfg = config.get("train", {})
+    output_cfg = config.get("output", {})
+    dataset_cfg = config.get("dataset", {})
+
+    data_paths = dataset_cfg.get("data_path", ["./dataset"])
+    if isinstance(data_paths, list):
+        data_path = data_paths[0]
+    else:
+        data_path = data_paths
+
+    classification = train_cfg.get("classification", True)
+    regression = train_cfg.get("regression", False)
+
+    cmd = [
+        "python", joint_script,
+        "--model_name_or_path", model_name,
+        "--data_path", data_path,
+        "--classification", str(classification),
+        "--regression", str(regression),
+        "--lambda_batch", str(joint_cfg.get("lambda_batch", 0.1)),
+        "--lambda_bio", str(joint_cfg.get("lambda_bio", 0.05)),
+        "--norm_hidden_size", str(joint_cfg.get("norm_hidden_size", 128)),
+        "--model_max_length", str(train_cfg.get("model_max_length", [512])[0] if isinstance(train_cfg.get("model_max_length", 512), list) else train_cfg.get("model_max_length", 512)),
+        "--per_device_train_batch_size", str(train_cfg.get("per_device_train_batch_size", [8])[0] if isinstance(train_cfg.get("per_device_train_batch_size", 8), list) else train_cfg.get("per_device_train_batch_size", 8)),
+        "--per_device_eval_batch_size", str(train_cfg.get("per_device_eval_batch_size", [16])[0] if isinstance(train_cfg.get("per_device_eval_batch_size", 16), list) else train_cfg.get("per_device_eval_batch_size", 16)),
+        "--learning_rate", str(train_cfg.get("learning_rate", [3e-5])[0] if isinstance(train_cfg.get("learning_rate", 3e-5), list) else train_cfg.get("learning_rate", 3e-5)),
+        "--num_train_epochs", str(train_cfg.get("num_train_epochs", [3])[0] if isinstance(train_cfg.get("num_train_epochs", 3), list) else train_cfg.get("num_train_epochs", 3)),
+        "--warmup_steps", str(train_cfg.get("warmup_steps", [50])[0] if isinstance(train_cfg.get("warmup_steps", 50), list) else train_cfg.get("warmup_steps", 50)),
+        "--logging_steps", str(train_cfg.get("logging_steps", [10])[0] if isinstance(train_cfg.get("logging_steps", 10), list) else train_cfg.get("logging_steps", 10)),
+        "--save_steps", str(train_cfg.get("save_steps", [100])[0] if isinstance(train_cfg.get("save_steps", 100), list) else train_cfg.get("save_steps", 100)),
+        "--eval_steps", str(train_cfg.get("eval_steps", [100])[0] if isinstance(train_cfg.get("eval_steps", 100), list) else train_cfg.get("eval_steps", 100)),
+        "--evaluation_strategy", str(train_cfg.get("evaluation_strategy", ["steps"])[0] if isinstance(train_cfg.get("evaluation_strategy", "steps"), list) else train_cfg.get("evaluation_strategy", "steps")),
+        "--output_dir", str(output_cfg.get("output_dir", ["output_joint"])[0] if isinstance(output_cfg.get("output_dir", "output_joint"), list) else output_cfg.get("output_dir", "output_joint")),
+        "--overwrite_output_dir", str(output_cfg.get("overwrite_output_dir", True)),
+        "--bf16", str(train_cfg.get("bf16", False)),
+        "--fp16", str(train_cfg.get("fp16", False)),
+        "--run_name", str(train_cfg.get("run_name", ["joint_run"])[0] if isinstance(train_cfg.get("run_name", "joint_run"), list) else train_cfg.get("run_name", "joint_run")),
+    ]
+
+    saved_model_dir = train_cfg.get("saved_model_dir")
+    if saved_model_dir:
+        if isinstance(saved_model_dir, list):
+            saved_model_dir = saved_model_dir[0]
+        cmd += ["--saved_model_dir", saved_model_dir]
+
+    print("[genomefactory-cli] Running joint training:", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+
+# ======================================================================
+# Feature 3: Multi-task learning
+# ======================================================================
+
+def run_train_mtl(config: dict, config_path: str):
+    """
+    Multi-task learning: multiple tasks share one backbone, each with
+    its own prediction head and loss.
+    """
+    mtl_script = os.path.join(
+        os.path.dirname(__file__), "Train/train_scripts/mtl/train_mtl.py"
+    )
+    cmd = ["python", mtl_script, "--config_path", config_path]
+    print("[genomefactory-cli] Running MTL training:", " ".join(cmd))
+    subprocess.run(cmd, check=True)
+
+
+# ======================================================================
+# Original commands below
+# ======================================================================
 
 def run_sae_regression(config: dict):
     """

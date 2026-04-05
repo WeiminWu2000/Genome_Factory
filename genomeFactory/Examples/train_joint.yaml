@@ -1,0 +1,40 @@
+model:
+  model_name_or_path: "zhihan1996/DNABERT-2-117M"
+
+method:
+  finetuning_type: "full"
+
+joint:
+  lambda_batch: 0.1
+  lambda_bio: 0.05
+  norm_hidden_size: 128
+
+dataset:
+  data_path: ["./species_classification"]
+
+train:
+  use_flash_attention: false
+  classification: true
+  regression: false
+  run_name: ["joint_run"]
+  model_max_length: [512]
+  per_device_train_batch_size: [8]
+  per_device_eval_batch_size: [16]
+  gradient_accumulation_steps: [1]
+  learning_rate: [3.0e-5]
+  num_train_epochs: [3]
+  lr_scheduler_type: ["cosine"]
+  warmup_steps: [50]
+  logging_steps: [10]
+  save_steps: [100]
+  evaluation_strategy: ["steps"]
+  eval_steps: [100]
+  save_total_limit: [3]
+  load_best_model_at_end: true
+  use_wandb: false
+  bf16: true
+  fp16: false
+
+output:
+  output_dir: ["output_joint"]
+  overwrite_output_dir: true

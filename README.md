@@ -129,6 +129,55 @@ Genome-Factory provides specialized dataset generation tools for common genomic 
 
 *   All datasets feature quality control, configurable train/val/test splits, and output CSV files with `sequence,label` format.
 
+### Custom Multi-Stage Pipelines (Genome Collector)
+
+Genome-Factory supports user-defined, multi-stage bioinformatics pipelines beyond simple sequence extraction. Users chain pipeline stages in a YAML config, and each stage reads from the previous stage's output directory.
+
+**Built-in stages:**
+
+| Stage | Description |
+|-------|-------------|
+| `HostFilter` | Remove host-derived reads via minimap2 alignment (requires minimap2 + samtools) |
+| `QualityTrim` | Filter by length, GC content, N-content; optional adapter trimming |
+| `TaxonExtract` | Keep sequences matching specific taxon IDs or species names |
+| `SequenceExtract` | Extract fixed-length segments and produce train/dev/test CSV splits |
+| `CustomCommand` | Run an arbitrary shell command with `{input_dir}` / `{output_dir}` placeholders |
+
+**Example pipeline config** (`genomeFactory/Examples/collect_pipeline.yaml`):
+
+```yaml
+pipeline:
+  work_dir: "./pipeline_output"
+  input_dir: "./raw_genomes"
+  stages:
+    - name: "host_filter"
+      type: "HostFilter"
+      config:
+        host_ref: "/path/to/host_genome.fa"
+        threads: 4
+    - name: "quality_trim"
+      type: "QualityTrim"
+      config:
+        min_length: 100
+        max_n_frac: 0.05
+        gc_low: 0.3
+        gc_high: 0.7
+    - name: "sequence_extract"
+      type: "SequenceExtract"
+      config:
+        segments_per_file: 50
+        segment_length: 1000
+        train_ratio: 0.7
+        dev_ratio: 0.15
+```
+
+**Run:**
+```bash
+genomefactory-cli collect genomeFactory/Examples/collect_pipeline.yaml
+```
+
+Users can also implement custom stages by subclassing `PipelineStage` and implementing `process(input_dir, output_dir, config)`. See `genomeFactory/Data/Pipeline/stages.py` for examples.
+
 ### Training
 
 For fine-tuning GFMs, Genome-Factory supports two primary task types: **classification** and **regression**. You specify the desired `task_type` in the training YAML configuration file.
@@ -162,6 +211,87 @@ Fine-tune GFMs using different methods:
     **Note on Flash Attention:** To enable Flash Attention, set the `flash_attention` argument to `true` in your YAML configuration file. You must also enable mixed-precision training by setting either `bf16: true` or `fp16: true`. If `flash_attention` is set to `false`, or if a specific GFM does not support this argument, the model's default attention mechanism will be used.
 
     **Benchmarking:** After fine-tuning, performance metrics are saved to a JSON file. You can use these metrics for benchmarking (e.g., comparing the performance of different models or tuning methods on specific tasks).
+
+#### Joint Optimization of Preprocessing and Training
+
+The standard pipeline treats preprocessing (GC normalization, quality filtering) and model training as separate steps, so they cannot inform each other. The `train_joint` command enables joint optimization by:
+
+1. Inserting a **learnable NormalizationLayer** (a lightweight residual MLP) between the tokenizer embeddings and the foundation model encoder. This layer starts as a near-identity function and gradually learns a task-informed normalization during fine-tuning.
+
+2. Training with a **composite loss**:
+   - **L_task**: the standard task loss (cross-entropy for classification, MSE for regression)
+   - **L_batch** (MMD): Maximum Mean Discrepancy penalty that encourages batch-invariant representations, mitigating technical batch effects
+   - **L_bio** (k-mer preservation): penalizes the normalization layer if it distorts the embedding space in a way that loses k-mer frequency structure — sequences with similar biological motif content must remain close in embedding space after normalization
+
+   `L = L_task + λ_batch × L_batch + λ_bio × L_bio`
+
+3. Both the normalization parameters and the model parameters are optimized end-to-end, so data normalization adapts to the final task rather than being decided a priori.
+
+**Example config** (`genomeFactory/Examples/train_joint.yaml`):
+```yaml
+model:
+  model_name_or_path: "zhihan1996/DNABERT-2-117M"
+joint:
+  lambda_batch: 0.1        # MMD batch-invariance weight
+  lambda_bio: 0.05         # k-mer preservation weight
+  norm_hidden_size: 128    # NormalizationLayer MLP hidden dim
+dataset:
+  data_path: ["./my_dataset"]
+train:
+  classification: true
+  num_train_epochs: [3]
+  learning_rate: [3.0e-5]
+  # ... other training arguments ...
+```
+
+**Run:**
+```bash
+genomefactory-cli train_joint genomeFactory/Examples/train_joint.yaml
+```
+
+The trained model and NormalizationLayer weights are saved together. See `genomeFactory/Train/workflow/joint/` for implementation details.
+
+#### Multi-Task Learning (MTL)
+
+Genome-Factory supports simultaneous optimization across multiple related tasks from a single shared backbone. When the training config contains an `mtl` section, the framework automatically:
+
+1. Loads a shared foundation model backbone (e.g., DNABERT-2)
+2. Attaches one prediction head per task (classification head with cross-entropy loss, or regression head with MSE loss)
+3. Samples mini-batches via round-robin or proportional scheduling across tasks
+4. Computes a weighted total loss: `L = Σ(w_i × L_i)` where weights `w_i` are user-configurable
+
+**Example config** (`genomeFactory/Examples/train_mtl.yaml`):
+```yaml
+model:
+  model_name_or_path: "zhihan1996/DNABERT-2-117M"
+mtl:
+  sampling_strategy: "round_robin"   # or "proportional"
+  tasks:
+    - name: "histone_classification"
+      type: "classification"
+      data_path: "./histone_data"
+      num_labels: 2
+      weight: 1.0
+    - name: "expression_regression"
+      type: "regression"
+      data_path: "./expression_data"
+      weight: 0.5
+train:
+  model_max_length: 128
+  per_device_train_batch_size: 8
+  learning_rate: 3.0e-5
+  num_train_epochs: 3
+  # ... other training arguments ...
+output:
+  output_dir: "output_mtl"
+```
+
+**Run:**
+```bash
+genomefactory-cli train genomeFactory/Examples/train_mtl.yaml
+```
+
+After training, per-task evaluation metrics are saved to `output_dir/results/mtl_eval_results.json`, and the shared backbone plus per-task heads are saved separately (`task_heads.pt`). This enables joint representation learning — for example, simultaneously training histone modification prediction (classification) and gene expression regression from the same DNABERT-2 backbone.
 
 ### Inference
 

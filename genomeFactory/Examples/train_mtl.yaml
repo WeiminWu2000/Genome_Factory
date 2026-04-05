@@ -1,0 +1,41 @@
+model:
+  model_name_or_path: "zhihan1996/DNABERT-2-117M"
+
+method:
+  finetuning_type: "full"
+
+mtl:
+  sampling_strategy: "round_robin"
+  tasks:
+    - name: "promoter_classification"
+      type: "classification"
+      data_path: "./promoter_data"
+      num_labels: 2
+      weight: 1.0
+
+    - name: "gc_regression"
+      type: "regression"
+      data_path: "./gc_regression_data"
+      weight: 0.5
+
+train:
+  model_max_length: 128
+  per_device_train_batch_size: 8
+  per_device_eval_batch_size: 16
+  learning_rate: 3.0e-5
+  num_train_epochs: 3
+  lr_scheduler_type: "cosine"
+  warmup_steps: 50
+  logging_steps: 10
+  save_steps: 100
+  eval_steps: 100
+  evaluation_strategy: "steps"
+  save_total_limit: 3
+  load_best_model_at_end: true
+  bf16: true
+  fp16: false
+  seed: 42
+
+output:
+  output_dir: "output_mtl"
+  overwrite_output_dir: true

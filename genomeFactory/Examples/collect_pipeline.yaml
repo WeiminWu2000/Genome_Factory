@@ -1,0 +1,22 @@
+pipeline:
+  work_dir: "./pipeline_output"
+  input_dir: "./raw_genomes"
+
+  stages:
+    - name: "quality_trim"
+      type: "QualityTrim"
+      config:
+        min_length: 100
+        max_length: 100000
+        max_n_frac: 0.05
+        gc_low: 0.3
+        gc_high: 0.7
+
+    - name: "sequence_extract"
+      type: "SequenceExtract"
+      config:
+        segments_per_file: 50
+        segment_length: 1000
+        train_ratio: 0.7
+        dev_ratio: 0.15
+        seed: 42
